@@ -1,0 +1,233 @@
+<main class="container mx-auto px-4 py-8">
+  <%= if @phase != :questions do %>
+    <div class="flex items-end justify-end space-x-6">
+      <%= for {_, player} <- @players, player.id != @id do %>
+        <div
+          class="cursor"
+          style={"position: absolute; left: #{player.x}px; top: #{player.y}px;"}>
+          🖱️ {player.name}
+        </div>
+      <% end %>
+      <div class="text-sm text-gray-300">
+        <span class="text-green-400">●</span> Online
+      </div>
+    </div>
+  <% end %>
+  <div id="game-area" phx-hook="CursorTracker"></div>
+  
+  <%= if @phase == :lobby do %>
+    <!-- Lobby Phase -->
+    <div class="max-w-2xl mx-auto">
+      <div class="bg-gray-800 rounded-lg border border-gray-700 p-6 shadow-xl">
+        <h2 class="text-2xl font-bold text-center mb-6 text-yellow-400">🎮 GAME LOBBY</h2>
+        
+        <form phx-submit="register" class="mb-6">
+          <div class="flex space-x-2">
+            <input 
+              name="name"
+              disabled={@name != nil}
+              placeholder={if @name != nil, do: @name <> " - " <> @id, else: "Enter your name"} 
+              class="flex-1 bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-red-500"
+            />
+            <button 
+              type="submit" 
+              disabled={@name != nil}
+              class="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white px-6 py-2 rounded font-semibold transition-all duration-200 transform hover:scale-105"
+            >
+              JOIN
+            </button>
+          </div>
+        </form>
+
+        <!-- Players List -->
+        <div class="mb-6">
+          <h3 class="text-lg font-semibold mb-3 text-blue-400">👥 Players Online</h3>
+          <div class="bg-gray-700 rounded p-4 min-h-20">
+            <%= if map_size(@players) == 0 do %>
+              <p class="text-gray-400 text-center italic">No players yet...</p>
+            <% else %>
+              <ul class="space-y-2">
+                <%= for {id, %{name: name}} <- @players do %>
+                  <li class="flex items-center space-x-2">
+                    <span class="w-2 h-2 bg-green-400 rounded-full"></span>
+                    <span class="text-white">{name}</span>
+                    <span class="text-xs text-gray-400">({id})</span>
+                  </li>
+                <% end %>
+              </ul>
+            <% end %>
+          </div>
+        </div>
+        <div class="text-center text-gray-400">
+          <p>Waiting for more players...</p>
+        </div>
+        <form phx-submit="clear_session">
+          <button 
+            type="submit" 
+            class="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white px-6 py-2 rounded font-semibold transition-all duration-200 transform hover:scale-105"
+          >
+            CLEAR USER
+          </button>
+        </form>
+      </div>
+    </div>
+  <% end %>
+
+  <%= if @phase == :questions do %>
+    <!-- Questions Phase -->
+    <%= if @id == @assassin do %>
+      <div class="max-w-2xl mx-auto">
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-6 shadow-xl mb-6">
+          <p class="text-center text-gray-400">
+            Você é o assassino.
+            <br>
+            Voce deve responder as perguntas para que os jogadores tentem adivinhar quem é o assassino.
+
+            Seu objetivo é tentar enganar os jogadores quando alguem reportar o assassino.
+            Voce pode fazer requests como pode matar requests de outros jogadores, pra isso existe uma janela
+            de tempo para voce matar elas.
+          </p>
+        </div>
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-6 shadow-xl">
+          <h2 class="text-2xl font-bold text-center mb-6 text-red-400">🔪 ASSASSIN QUESTIONS</h2>
+            <form phx-submit="answer_clue_question" class="mb-4">
+              <%= for i <- 0..7 do %>
+                <div class="bg-gray-700 rounded p-4 mb-4">
+                  <label class="block text-lg font-semibold mb-2 text-yellow-400">
+                    {@clues["q#{i}"]}
+                  </label>
+                  <div class="flex space-x-2">
+                    <input 
+                      name={"a#{i}"}
+                      value={@form_answers[to_string(i)] || ""}
+                      phx-blur="update_answer"
+                      phx-value-index={i}
+                      phx-debounce="500"
+                      placeholder="Your answer" 
+                      class="flex-1 bg-gray-600 border border-gray-500 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-red-500"
+                    />
+                  </div>
+                </div>
+              <% end %>
+              <button 
+                type="submit" 
+                class="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded font-semibold transition-colors"
+              >
+                SEND ANSWERS
+              </button>
+            </form>
+        </div>
+      </div>
+    <% else %>
+      <div class="max-w-2xl mx-auto">
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-6 shadow-xl">
+          <h2 class="text-2xl font-bold text-center mb-6 text-red-400">🔪 WAITING FOR ASSASSIN QUESTIONS</h2>
+          <p class="text-center text-gray-400">
+            Você não é o assassino.
+          </p>
+          <p class="text-center text-gray-400">
+            Qual a sua missão?	
+          </p>
+          <p class="text-left text-gray-400 mb-2">
+            Você deve realizar as requests que irão aparecer na tela. Cada jogador terá
+            sua própria requisição e sua própria resposta.
+          </p>
+          <p class="text-left text-gray-400 mb-2">
+            Cabe a você clicar no botão de "Fazer Request" para realizar a request.
+            Cada Request tem um tempo de processamento, durente esse tempo o assassino pode
+            ou não matar sua requisição.
+          </p>
+          <p class="text-left text-gray-400 mb-2">
+            Caso o assassino mate sua requisição, você deverá analisar
+            o network de response/request e procurar por pistas de quem é o assassino.
+          </p>
+          <p class="text-left text-gray-400 mb-2">
+            Caso voce tenha suspeita de quem seja o assassino, voce pode clicar no botão de "Reportar"
+            para iniciar a votação.
+          </p>
+          <p class="text-left text-gray-400 mb-2">
+            Objetivo é concluir o total de requests ou descobrir quem é o assassino.
+          </p>
+        </div>
+      </div>
+    <% end %>
+  <% end %>
+
+  <%= if @phase == :game do %>
+    <!-- Game Phase -->
+    <div class="space-y-6">
+      <!-- Game Stats Header -->
+      <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+        <div class="flex justify-between items-center">
+          <div class="flex space-x-6">
+            <div class="text-center">
+              <div class="text-2xl font-bold text-blue-400">{map_size(@players)}</div>
+              <div class="text-sm text-gray-400">Players</div>
+            </div>
+            <div class="text-center">
+              <div class="text-2xl font-bold text-green-400">{map_size(@requests)}</div>
+              <div class="text-sm text-gray-400">Requests</div>
+            </div>
+            <div class="text-center">
+              <div class="text-2xl font-bold text-red-400">{length(@logs)}</div>
+              <div class="text-sm text-gray-400">Actions</div>
+            </div>
+          </div>
+          <div class="text-right">
+            <div class="text-sm text-gray-400">Game Phase</div>
+            <div class="text-lg font-bold text-yellow-400">ACTIVE</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Game Area -->
+      <div id="game-area-2" phx-hook="GameMouse" class="bg-gray-800 rounded-lg border border-gray-700 p-6 min-h-96 relative overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-br from-gray-800 to-gray-900 opacity-50"></div>
+        
+        <%= for {id, %{status: status}} <- @requests do %>
+          <div 
+            class="request inline-block m-1 p-2 border rounded cursor-pointer transition-all duration-200 hover:scale-105" 
+            class={"#{if status == 500, do: 'bg-red-900 border-red-600', else: 'bg-blue-900 border-blue-600 hover:bg-blue-800'}"}
+            phx-click="click_request" 
+            phx-value-request_id={id} 
+            phx-value-player_id="player-1"
+          >
+            <%= if status == 500, do: "🔴", else: "🔵" %> Req {id} ({status})
+            <%= if hint = @hints[to_string(id)] do %>
+              <div class="text-xs italic text-yellow-300 mt-1">💡 {hint}</div>
+            <% end %>
+          </div>
+        <% end %>
+
+        <%= for {id, %{x: x, y: y, name: name}} <- @players do %>
+          <div 
+            class="cursor absolute transition-all duration-200" 
+            style={"left: #{x}px; top: #{y}px;"}
+          >
+            <div class="bg-purple-600 text-white px-2 py-1 rounded text-sm font-semibold shadow-lg">
+              🧍 {name}
+            </div>
+          </div>
+        <% end %>
+      </div>
+
+      <!-- Game Logs -->
+      <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+        <h3 class="text-lg font-semibold mb-3 text-green-400">📋 GAME LOGS</h3>
+        <div class="bg-gray-700 rounded p-3 h-32 overflow-y-auto">
+          <%= if length(@logs) == 0 do %>
+            <p class="text-gray-400 text-center italic">No actions yet...</p>
+          <% else %>
+            <%= for log <- @logs do %>
+              <div class="text-sm mb-1">
+                <span class="text-blue-400">{log.player}</span>
+                <span class="text-gray-300">{log.action}</span>
+                <span class="text-yellow-400">{log.request}</span>
+              </div>
+            <% end %>
+          <% end %>
+        </div>
+      </div>
+    </div>
+  <% end %>
+</main>
