@@ -40,6 +40,15 @@ defmodule KillingRequestGameWeb.Router do
     get "/clear_session", GameController, :clear_session
   end
 
+  scope "/api", KillingRequestGameWeb do
+    pipe_through :api
+
+    post "/request", RequestController, :make_request
+    post "/block", RequestController, :block_request
+    post "/check_blocked", RequestController, :check_blocked
+    get "/test", RequestController, :test_endpoint
+  end
+
   # Other scopes may use custom stacks.
   # scope "/api", KillingRequestGameWeb do
   #   pipe_through :api

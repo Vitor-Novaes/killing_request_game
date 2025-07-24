@@ -3,30 +3,27 @@
     <div class="flex items-end justify-end space-x-6">
       <%= for {_, player} <- @players, player.id != @id do %>
         <div
-          class="cursor"
-          style={"position: absolute; left: #{player.x}px; top: #{player.y}px;"}>
-          🖱️ {player.name}
+          class="cursor text-xs"
+          style={"position: absolute; left: #{player.x}px; top: #{player.y}px; z-index: 9999; pointer-events: none;"}>
+          🔪 {player.name} <span class="text-xs text-gray-300">({player.id})</span>
         </div>
       <% end %>
-      <div class="text-sm text-gray-300">
-        <span class="text-green-400">●</span> Online
-      </div>
     </div>
   <% end %>
-  <div id="game-area" phx-hook="CursorTracker"></div>
+  <div id="game-area" phx-hook="CursorTracker" style="z-index: 1000;"></div>
   
   <%= if @phase == :lobby do %>
     <!-- Lobby Phase -->
     <div class="max-w-2xl mx-auto">
       <div class="bg-gray-800 rounded-lg border border-gray-700 p-6 shadow-xl">
-        <h2 class="text-2xl font-bold text-center mb-6 text-yellow-400">🎮 GAME LOBBY</h2>
+        <h2 class="text-2xl font-bold text-center mb-6 text-yellow-400">🎮 SALA DO JOGO</h2>
         
         <form phx-submit="register" class="mb-6">
           <div class="flex space-x-2">
             <input 
               name="name"
               disabled={@name != nil}
-              placeholder={if @name != nil, do: @name <> " - " <> @id, else: "Enter your name"} 
+              placeholder={if @name != nil, do: @name <> " - " <> @id, else: "Digite seu nome"} 
               class="flex-1 bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-red-500"
             />
             <button 
@@ -34,17 +31,17 @@
               disabled={@name != nil}
               class="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white px-6 py-2 rounded font-semibold transition-all duration-200 transform hover:scale-105"
             >
-              JOIN
+              ENTRAR
             </button>
           </div>
         </form>
 
         <!-- Players List -->
         <div class="mb-6">
-          <h3 class="text-lg font-semibold mb-3 text-blue-400">👥 Players Online</h3>
+          <h3 class="text-lg font-semibold mb-3 text-blue-400">👥 Jogadores Online</h3>
           <div class="bg-gray-700 rounded p-4 min-h-20">
             <%= if map_size(@players) == 0 do %>
-              <p class="text-gray-400 text-center italic">No players yet...</p>
+              <p class="text-gray-400 text-center italic">Nenhum jogador ainda...</p>
             <% else %>
               <ul class="space-y-2">
                 <%= for {id, %{name: name}} <- @players do %>
@@ -59,14 +56,14 @@
           </div>
         </div>
         <div class="text-center text-gray-400">
-          <p>Waiting for more players...</p>
+          <p>Aguardando mais jogadores...</p>
         </div>
         <form phx-submit="clear_session">
           <button 
             type="submit" 
             class="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white px-6 py-2 rounded font-semibold transition-all duration-200 transform hover:scale-105"
           >
-            CLEAR USER
+            LIMPAR COOKIES
           </button>
         </form>
       </div>
@@ -89,7 +86,7 @@
           </p>
         </div>
         <div class="bg-gray-800 rounded-lg border border-gray-700 p-6 shadow-xl">
-          <h2 class="text-2xl font-bold text-center mb-6 text-red-400">🔪 ASSASSIN QUESTIONS</h2>
+          <h2 class="text-2xl font-bold text-center mb-6 text-red-400">🔪 PERGUNTAS DO ASSASSINO</h2>
             <form phx-submit="answer_clue_question" class="mb-4">
               <%= for i <- 0..7 do %>
                 <div class="bg-gray-700 rounded p-4 mb-4">
@@ -99,11 +96,12 @@
                   <div class="flex space-x-2">
                     <input 
                       name={"a#{i}"}
+                      required
                       value={@form_answers[to_string(i)] || ""}
                       phx-blur="update_answer"
                       phx-value-index={i}
                       phx-debounce="500"
-                      placeholder="Your answer" 
+                      placeholder="Sua resposta" 
                       class="flex-1 bg-gray-600 border border-gray-500 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-red-500"
                     />
                   </div>
@@ -113,7 +111,7 @@
                 type="submit" 
                 class="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded font-semibold transition-colors"
               >
-                SEND ANSWERS
+                ENVIAR RESPOSTAS
               </button>
             </form>
         </div>
@@ -121,7 +119,7 @@
     <% else %>
       <div class="max-w-2xl mx-auto">
         <div class="bg-gray-800 rounded-lg border border-gray-700 p-6 shadow-xl">
-          <h2 class="text-2xl font-bold text-center mb-6 text-red-400">🔪 WAITING FOR ASSASSIN QUESTIONS</h2>
+          <h2 class="text-2xl font-bold text-center mb-6 text-red-400">🔪 AGUARDANDO PERGUNTAS DO ASSASSINO</h2>
           <p class="text-center text-gray-400">
             Você não é o assassino.
           </p>
@@ -153,81 +151,404 @@
     <% end %>
   <% end %>
 
-  <%= if @phase == :game do %>
+  <%= if @phase == :game || @phase == :report do %>
     <!-- Game Phase -->
-    <div class="space-y-6">
-      <!-- Game Stats Header -->
-      <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
-        <div class="flex justify-between items-center">
-          <div class="flex space-x-6">
-            <div class="text-center">
-              <div class="text-2xl font-bold text-blue-400">{map_size(@players)}</div>
-              <div class="text-sm text-gray-400">Players</div>
-            </div>
-            <div class="text-center">
-              <div class="text-2xl font-bold text-green-400">{map_size(@requests)}</div>
-              <div class="text-sm text-gray-400">Requests</div>
-            </div>
-            <div class="text-center">
-              <div class="text-2xl font-bold text-red-400">{length(@logs)}</div>
-              <div class="text-sm text-gray-400">Actions</div>
-            </div>
-          </div>
-          <div class="text-right">
-            <div class="text-sm text-gray-400">Game Phase</div>
-            <div class="text-lg font-bold text-yellow-400">ACTIVE</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Game Area -->
-      <div id="game-area-2" phx-hook="GameMouse" class="bg-gray-800 rounded-lg border border-gray-700 p-6 min-h-96 relative overflow-hidden">
-        <div class="absolute inset-0 bg-gradient-to-br from-gray-800 to-gray-900 opacity-50"></div>
-        
-        <%= for {id, %{status: status}} <- @requests do %>
-          <div 
-            class="request inline-block m-1 p-2 border rounded cursor-pointer transition-all duration-200 hover:scale-105" 
-            class={"#{if status == 500, do: 'bg-red-900 border-red-600', else: 'bg-blue-900 border-blue-600 hover:bg-blue-800'}"}
-            phx-click="click_request" 
-            phx-value-request_id={id} 
-            phx-value-player_id="player-1"
-          >
-            <%= if status == 500, do: "🔴", else: "🔵" %> Req {id} ({status})
-            <%= if hint = @hints[to_string(id)] do %>
-              <div class="text-xs italic text-yellow-300 mt-1">💡 {hint}</div>
-            <% end %>
-          </div>
-        <% end %>
-
-        <%= for {id, %{x: x, y: y, name: name}} <- @players do %>
-          <div 
-            class="cursor absolute transition-all duration-200" 
-            style={"left: #{x}px; top: #{y}px;"}
-          >
-            <div class="bg-purple-600 text-white px-2 py-1 rounded text-sm font-semibold shadow-lg">
-              🧍 {name}
-            </div>
-          </div>
-        <% end %>
-      </div>
-
-      <!-- Game Logs -->
-      <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
-        <h3 class="text-lg font-semibold mb-3 text-green-400">📋 GAME LOGS</h3>
-        <div class="bg-gray-700 rounded p-3 h-32 overflow-y-auto">
-          <%= if length(@logs) == 0 do %>
-            <p class="text-gray-400 text-center italic">No actions yet...</p>
-          <% else %>
-            <%= for log <- @logs do %>
-              <div class="text-sm mb-1">
-                <span class="text-blue-400">{log.player}</span>
-                <span class="text-gray-300">{log.action}</span>
-                <span class="text-yellow-400">{log.request}</span>
+    <div id="game-phase" class="flex gap-6" phx-hook="RequestHandler">
+      <!-- Left Column - Players List -->
+      <div class="w-80 flex-shrink-0">
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-4 sticky top-4">
+          <h3 class="text-lg font-semibold mb-3 text-blue-400">👥 JOGADORES ONLINE</h3>
+          <div class="bg-gray-700 rounded p-3 h-[calc(100vh-200px)] overflow-y-auto">
+            <%= if map_size(@players) == 0 do %>
+              <p class="text-gray-400 text-center italic">No players online...</p>
+            <% else %>
+              <div class="space-y-2">
+                <%= for {id, player} <- @players do %>
+                  <div class="text-sm p-2 bg-gray-600 rounded">
+                    <div class="flex items-center space-x-2 mb-1">
+                      <span class="w-2 h-2 bg-green-400 rounded-full"></span>
+                      <span class="text-white font-semibold">{player.name} - {player.id}</span>
+                    </div>
+                    <%= if player.id == @id do %>
+                      <div class="text-blue-400 text-xs mt-1">← You</div>
+                    <% end %>
+                  </div>
+                <% end %>
               </div>
             <% end %>
-          <% end %>
+            <%= if @phase != :report && @id != @assassin do %>
+              
+            <% end %>
+          </div>
         </div>
       </div>
+
+      <%= if @phase == :report do %>
+        <!-- Voting Column -->
+        <div class="w-96 flex-shrink-0">
+          <div class="bg-gray-800 rounded-lg border border-gray-700 p-4 sticky top-4">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-lg font-semibold text-red-400">🗳️ VOTAÇÃO DO ASSASSINO</h3>
+              <div class="text-xs text-gray-400 bg-red-900 px-2 py-1 rounded">FASE CRÍTICA</div>
+            </div>
+            
+            <div class="bg-red-900 rounded-lg border border-red-700 p-3 mb-4">
+              <div class="text-center text-red-300 text-sm mb-2">
+                <span class="font-bold">⚠️ ATENÇÃO!</span>
+              </div>
+              <div class="text-xs text-red-200 text-center">
+                Alguém suspeitou do assassino! Vote em quem você acha que é o assassino.
+              </div>
+            </div>
+
+            <div class="bg-gray-700 rounded p-3 h-[calc(100vh-300px)] overflow-y-auto">
+              <%= if map_size(@players) == 0 do %>
+                <p class="text-gray-400 text-center italic">Nenhum jogador para votar...</p>
+              <% else %>
+                <div class="space-y-3">
+                  <%= for {id, player} <- @players do %>
+                    <div class="bg-gray-600 rounded-lg p-3 hover:bg-gray-500 transition-colors">
+                      <div class="flex items-center justify-between">
+                        <div class="flex items-center space-x-3">
+                          <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
+                            <span class="text-white text-xs font-bold">{String.first(player.name)}</span>
+                          </div>
+                          <div>
+                            <div class="text-white font-semibold text-sm">{player.name}</div>
+                            <div class="text-gray-400 text-xs">ID: {player.id}</div>
+                          </div>
+                        </div>
+                        <%= if @id != id do %>
+                          <button 
+                            phx-click="vote_player" 
+                            phx-value-target_id={id}
+                            class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded text-sm font-semibold transition-colors transform hover:scale-105"
+                          >
+                            🗳️ Votar
+                          </button>
+                        <% else %>
+                          <div class="text-gray-500 text-xs px-4 py-2">Você</div>
+                        <% end %>
+                      </div>
+                    </div>
+                  <% end %>
+                </div>
+              <% end %>
+            </div>
+
+            <div class="mt-4 bg-gray-700 rounded p-3">
+              <div class="text-center text-gray-300 text-sm mb-2">
+                <span class="font-bold">📊 Estatísticas</span>
+              </div>
+              <div class="grid grid-cols-2 gap-2 text-xs">
+                <div class="text-center">
+                  <div class="text-green-400 font-bold">{length(@successful_requests)}</div>
+                  <div class="text-gray-400">Sucessos</div>
+                </div>
+                <div class="text-center">
+                  <div class="text-red-400 font-bold">{length(@killed_requests)}</div>
+                  <div class="text-gray-400">Mortes</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      <% else %>
+        <!-- Middle Column - Main Game Content -->
+        <div class="flex-1 space-y-6">
+          <!-- Game Stats Header -->
+          <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+            <div class="flex justify-between items-center">
+              <div class="flex space-x-6">
+                <div class="text-center">
+                  <div class="text-2xl font-bold text-blue-400">{map_size(@players)}</div>
+                  <div class="text-sm text-gray-400">Players</div>
+                </div>
+                <div class="text-center">
+                  <div class="text-2xl font-bold text-green-400">{length(@successful_requests)}/40</div>
+                  <div class="text-sm text-gray-400">Requests</div>
+                </div>
+                <div class="text-center">
+                  <div class="text-2xl font-bold text-red-400">{length(@killed_requests)}/20</div>
+                  <div class="text-sm text-gray-400">Killed Requests</div>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="text-sm text-gray-400">Fase do Jogo</div>
+                                <div class="text-lg font-bold text-yellow-400">ATIVO</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Request Form -->
+          <div class="bg-gray-800 rounded-lg border border-gray-700 p-6">
+            <h3 class="text-lg font-semibold mb-4 text-green-400">🌐 Fazer Requisição HTTP</h3>
+            <form phx-submit="submit_request" class="space-y-4">
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-300 mb-2">PATH</label>
+                  <input 
+                    id="request-url"
+                    name="url"
+                    required
+                    value={@request_form.url || ""}
+                    phx-update="ignore"
+                    phx-debounce="500"
+                    phx-blur="update_request_form"
+                    phx-value-field="url"
+                    placeholder="/v1/customers"
+                    class="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-green-500"
+                  />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-300 mb-2">Método HTTP</label>
+                  <select 
+                    id="request-method"
+                    name="method"
+                    required
+                    value={@request_form.method || "GET"}
+                    phx-update="ignore"
+                    phx-debounce="500"
+                    phx-blur="update_request_form"
+                    phx-value-field="method"
+                    class="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white focus:outline-none focus:border-green-500"
+                  >
+                    <option value="GET">GET</option>
+                    <option value="POST">POST</option>
+                    <option value="PUT">PUT</option>
+                    <option value="DELETE">DELETE</option>
+                    <option value="PATCH">PATCH</option>
+                  </select>
+                </div>
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-300 mb-2">Request Body (JSON)</label>
+                  <textarea 
+                    id="request-body"
+                    name="body"
+                    rows="4"
+                    value={@request_form.body || ""}
+                    phx-update="ignore"
+                    phx-debounce="500"
+                    phx-blur="update_request_form"
+                    phx-value-field="body"
+                    placeholder='{"key": "value"}'
+                    class="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-green-500"
+                  ></textarea>
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-300 mb-2">Query Parameters (JSON)</label>
+                  <textarea 
+                    id="request-params"
+                    name="params"
+                    rows="4"
+                    value={@request_form.params || ""}
+                    phx-update="ignore"
+                    phx-debounce="500"
+                    phx-blur="update_request_form"
+                    phx-value-field="params"
+                    placeholder='{"param1": "value1", "param2": "value2"}'
+                    class="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-green-500"
+                  ></textarea>
+                </div>
+              </div>
+              <div class="flex justify-between items-center">
+                <div class="text-sm text-yellow-400">
+                  ⏰ Requisição será enviada após 5 segundos (assassino pode bloquear durante este tempo)
+                </div>
+                <button 
+                  type="submit" 
+                  class="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white px-6 py-2 rounded font-semibold transition-all duration-200 transform hover:scale-105"
+                >
+                  Enviar Requisição
+                </button>
+              </div>
+              <div class="text-xs text-gray-400 mt-2">
+                💡 Teste com: <code class="bg-gray-700 px-1 rounded">/v1/status</code>
+              </div>
+            </form>
+          </div>
+
+          <!-- Assassin Block Panel -->
+          <%= if @id == @assassin do %>
+            <div class="bg-red-900 rounded-lg border border-red-700 p-4">
+              <h3 class="text-lg font-semibold mb-3 text-red-400">🔪 PAINEL DE CONTROLE DO ASSASSINO</h3>
+              <p class="text-sm text-red-300 mb-4">Você pode bloquear requisições de outros jogadores durante a janela de 5 segundos.</p>
+              <div class="space-y-2">
+                <%= for {player_id, player} <- @players, player_id != @id do %>
+                  <div class="flex justify-between items-center bg-red-800 rounded p-2">
+                    <span class="text-white">{player.name} ({player_id})</span>
+                    <button 
+                      phx-click="block_player_request" 
+                      phx-value-target_player_id={player_id}
+                      class="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm font-semibold transition-colors"
+                    >
+                      Bloquear Requisição
+                    </button>
+                  </div>
+                <% end %>
+              </div>
+            </div>
+          <% end %>
+
+          <!-- Raw HTTP Response Display Area -->
+          <div id="game-area-2" class="bg-gray-800 rounded-lg border border-gray-700 p-6 min-h-96 relative overflow-hidden">
+            <div class="absolute inset-0 bg-gradient-to-br from-gray-800 to-gray-900 opacity-50"></div>
+            
+            <div class="relative z-10">
+              <h3 class="text-lg font-semibold mb-4 text-purple-400">📡 DETALHES DA RESPOSTA HTTP</h3>
+              
+              <%= if @selected_raw_response do %>
+                <div class="space-y-4 text-sm font-mono">
+                  <!-- Status Line -->
+                  <div class="bg-gray-700 p-3 rounded border border-gray-600">
+                    <div class="text-green-400 font-bold mb-2">Status Line</div>
+                    <div class="text-white">
+                      HTTP/1.1 {@selected_raw_response.status} {get_status_text(@selected_raw_response.status)}
+                    </div>
+                  </div>
+                  
+                  <!-- Request Info -->
+                  <div class="bg-gray-700 p-3 rounded border border-gray-600">
+                    <div class="text-blue-400 font-bold mb-2">Request</div>
+                    <div class="text-white mb-1">
+                      <span class="text-yellow-400">Method:</span> {inspect(@selected_raw_response.method)}
+                    </div>
+                    <div class="text-white mb-1">
+                      <span class="text-yellow-400">URL:</span> <span class="break-all">{@selected_raw_response.url}</span>
+                    </div>
+                    <div class="text-white">
+                      <span class="text-yellow-400">Size:</span> {@selected_raw_response.size} bytes
+                    </div>
+                  </div>
+                  
+                  <!-- Timestamp -->
+                  <div class="bg-gray-700 p-3 rounded border border-gray-600">
+                    <div class="text-cyan-400 font-bold mb-2">Timestamp</div>
+                    <div class="text-white">{@selected_raw_response.timestamp}</div>
+                  </div>
+                  
+                  <!-- Headers -->
+                  <div class="bg-gray-700 p-3 rounded border border-gray-600">
+                    <div class="text-purple-400 font-bold mb-2">Response Headers</div>
+                    <div class="space-y-1">
+                      <%= for header <- format_headers(@selected_raw_response.headers) do %>
+                        <div class="text-white">
+                          <span class="text-yellow-400">{header.key}:</span> <span class="break-all">{header.value}</span>
+                        </div>
+                      <% end %>
+                    </div>
+                  </div>
+                  
+                  <!-- Body -->
+                  <div class="bg-gray-700 p-3 rounded border border-gray-600">
+                    <div class="text-orange-400 font-bold mb-2">Response Body</div>
+                    <div class="text-white max-h-64 overflow-y-auto bg-gray-600 p-2 rounded">
+                      <%= format_response_body(@selected_raw_response.body) %>
+                    </div>
+                  </div>
+                </div>
+              <% else %>
+                <div class="text-gray-400 text-center italic py-8">
+                  <div class="text-2xl mb-2">📡</div>
+                  <div>Selecione uma requisição dos logs para ver os detalhes da resposta</div>
+                  <div class="text-xs mt-2">Clique em qualquer entrada de log com dados de resposta</div>
+                </div>
+              <% end %>
+            </div>
+          </div>
+        </div>
+      <% end %>
+
+      <!-- Right Column - Game Logs -->
+      <div class="w-80 flex-shrink-0">
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-4 sticky top-4">
+          <h3 class="text-lg font-semibold mb-3 text-green-400">📋 LOGS DO JOGO</h3>
+          <div class="bg-gray-700 rounded p-3 h-[calc(100vh-200px)] overflow-y-auto">
+            <%= if length(@logs) == 0 do %>
+              <p class="text-gray-400 text-center italic">Nenhuma ação ainda...</p>
+            <% else %>
+              <div class="space-y-2">
+                <%= for log <- @logs do %>
+                  <div class="text-sm p-2 bg-gray-600 rounded">
+                    <div class="flex items-center space-x-2 mb-1">
+                      <span class="text-blue-400 font-semibold">{log[:player]}</span>
+                      <span class="text-gray-300">{log[:action]}</span>
+                    </div>
+                    <div class="text-yellow-400 text-xs break-all">{log[:request]}</div>
+                    <%= if log[:response_size] do %>
+                      <div class="text-purple-400 text-xs">Response: {log[:response_size]} bytes</div>
+                    <% end %>
+                    <%= if log[:raw_response] do %>
+                      <div class="text-cyan-400 text-xs cursor-pointer hover:text-blue-400 mt-1" 
+                           phx-click="show_raw_response" 
+                           phx-value-log-index={@logs |> Enum.find_index(fn l -> l == log end)}>
+                        📡 Ver Detalhes Completos da Resposta
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </div>
+    </div>
+  <% end %>
+
+
+  <%= if @phase == :end do %>
+    <!-- End Phase -->
+    <div class="max-w-2xl mx-auto">
+      <div class="bg-gray-800 rounded-lg border border-gray-700 p-6 shadow-xl">
+        <h2 class="text-2xl font-bold text-center mb-6 text-red-400">🔪 FIM DE JOGO</h2>
+        <p class="text-center text-gray-400">
+          Fim de jogo.
+        </p>
+         <div class="text-center">
+            <div class="text-2xl font-bold text-green-400">{length(@successful_requests)}/40</div>
+            <div class="text-sm text-gray-400">Requests</div>
+          </div>
+          <div class="text-center">
+            <div class="text-2xl font-bold text-red-400">{length(@killed_requests)}/20</div>
+            <div class="text-sm text-gray-400">Killed Requests</div>
+          </div>
+        <p class="text-center text-gray-400">
+          O assassino foi {@assassin}.
+        </p>
+      </div>
+
+      <div class="bg-gray-800 rounded-lg border border-gray-700 p-4 sticky top-4">
+          <h3 class="text-lg font-semibold mb-3 text-green-400">📋 LOGS DO JOGO</h3>
+          <div class="bg-gray-700 rounded p-3 h-[calc(100vh-200px)] overflow-y-auto">
+            <%= if length(@logs) == 0 do %>
+              <p class="text-gray-400 text-center italic">Nenhuma ação ainda...</p>
+            <% else %>
+              <div class="space-y-2">
+                <%= for log <- @logs do %>
+                  <div class="text-sm p-2 bg-gray-600 rounded">
+                    <div class="flex items-center space-x-2 mb-1">
+                      <span class="text-blue-400 font-semibold">{log[:player]}</span>
+                      <span class="text-gray-300">{log[:action]}</span>
+                    </div>
+                    <div class="text-yellow-400 text-xs break-all">{log[:request]}</div>
+                    <%= if log[:response_size] do %>
+                      <div class="text-purple-400 text-xs">Response: {log[:response_size]} bytes</div>
+                    <% end %>
+                    <%= if log[:raw_response] do %>
+                      <div class="text-cyan-400 text-xs cursor-pointer hover:text-blue-400 mt-1" 
+                           phx-click="show_raw_response" 
+                           phx-value-log-index={@logs |> Enum.find_index(fn l -> l == log end)}>
+                        📡 Ver Detalhes Completos da Resposta
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+        </div>
     </div>
   <% end %>
 </main>

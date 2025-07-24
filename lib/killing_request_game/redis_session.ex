@@ -30,7 +30,9 @@ defmodule KillingRequestGame.RedisSession do
         # Initialize with default state if not found
         default_state = %{
           "players" => %{},
-          "requests" => generate_default_requests(),
+          "requests" => %{},
+          "successful_requests" => [],
+          "killed_requests" => [],
           "assassin" => nil,
           "logs" => [],
           "clues" => generate_clues(),
@@ -114,11 +116,19 @@ defmodule KillingRequestGame.RedisSession do
     end
   end
 
+  def set_phase(phase) do
+    update_game_controller(%{
+      "phase" => phase
+    })
+  end
+
   # Utility functions
   def reset_game do
     default_state = %{
       "players" => %{},
-      "requests" => generate_default_requests(),
+      "requests" => %{},
+      "successful_requests" => [],
+      "killed_requests" => [],
       "assassin" => nil,
       "logs" => [],
       "clues" => generate_clues(),
@@ -169,7 +179,7 @@ defmodule KillingRequestGame.RedisSession do
   def convert_to_redis_format(liveview_data) do
     %{
       "players" => convert_players_to_redis(liveview_data.players),
-      "requests" => convert_requests_to_redis(liveview_data.requests),
+      "requests" => liveview_data.requests,
       "assassin" => liveview_data.assassin,
       "logs" => convert_logs_to_redis(liveview_data.logs),
       "clues" => liveview_data.clues,
@@ -235,21 +245,16 @@ defmodule KillingRequestGame.RedisSession do
   end
   defp convert_logs_to_redis(_), do: []
 
-  # Private helper functions
-  defp generate_default_requests do
-    for id <- 1..40, into: %{}, do: {id, %{"status" => 200}}
-  end
-
   def save_clues(answers) do
     clues = %{
-      "q0" => "Banda favorita ?", "a0" => answers["a0"],
-      "q1" => "Filme favorito ?", "a1" => answers["a1"],
-      "q2" => "Comida favorita ?", "a2" => answers["a2"],
-      "q3" => "Cor favorita ?", "a3" => answers["a3"],
-      "q4" => "Animal favorito ?", "a4" => answers["a4"],
-      "q5" => "Cidade favorita ?", "a5" => answers["a5"],
-      "q6" => "País favorito ?", "a6" => answers["a6"],
-      "q7" => "Hobbie favorito ?", "a7" => answers["a7"]
+      "q0" => "Quando você era pequeno, qual era o seu sonho de futuro ?", "a0" => answers["a0"],
+      "q1" => "Qual seu filme favorito ?", "a1" => answers["a1"],
+      "q2" => "Qual sua comida favorita ?", "a2" => answers["a2"],
+      "q3" => "Qual sua cor favorita ?", "a3" => answers["a3"],
+      "q4" => "Qual seu animal favorito ?", "a4" => answers["a4"],
+      "q5" => "Quanto tempo de Dental Office ?", "a5" => answers["a5"],
+      "q6" => "Qual seu Hobbie favorito ?", "a6" => answers["a6"],
+      "q7" => "Qual seu jogo favorito ?", "a7" => answers["a7"]
     }
 
     update_game_controller(%{
@@ -257,16 +262,90 @@ defmodule KillingRequestGame.RedisSession do
     })
   end
 
+  def get_clues do
+    case get_game_controller() do
+      {:ok, state} -> state["clues"]
+      {:error, :not_found} -> %{}
+    end
+  end
+  # Request tracking functions
+  def increment_successful_requests(player_id) do
+    update_game_controller(%{
+      "successful_requests" => fn successful_requests ->
+        [player_id | successful_requests]
+      end
+    })
+  end
+
+  def increment_killed_requests(player_id) do
+    update_game_controller(%{
+      "killed_requests" => fn killed_requests ->
+        [player_id | killed_requests]
+      end
+    })
+  end
+
+  def get_killed_requests do
+    case get_game_controller() do
+      {:ok, state} -> state["killed_requests"]
+      {:error, :not_found} -> %{}
+    end
+  end
+
+  def get_successful_requests do
+    case get_game_controller() do
+      {:ok, state} -> state["successful_requests"]
+      {:error, :not_found} -> %{}
+    end
+  end
+
+  def block_player_request(player_id) do
+    # Store blocked request with timestamp and assassin info
+    assassin = case get_game_controller() do
+      {:ok, state} -> state["assassin"]
+      _ -> "unknown"
+    end
+
+    blocked_data = Jason.encode!(%{
+      "assassin_id" => assassin,
+      "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+    })
+
+    Redix.command(:redix, ["HSET", "#{@redis_prefix}:blocked_requests", player_id, blocked_data])
+    Redix.command(:redix, ["EXPIRE", "#{@redis_prefix}:blocked_requests", 10]) # Expire after 10 seconds
+  end
+
+  def get_blocked_requests do
+    case Redix.command(:redix, ["HGETALL", "#{@redis_prefix}:blocked_requests"]) do
+      {:ok, []} -> {:ok, %{}}
+      {:ok, list} ->
+        blocked_requests = list
+        |> Enum.chunk_every(2)
+        |> Map.new(fn [key, value] ->
+          case Jason.decode(value) do
+            {:ok, data} -> {key, data["assassin_id"]}
+            _ -> {key, "unknown"}
+          end
+        end)
+        {:ok, blocked_requests}
+      _ -> {:ok, %{}}
+    end
+  end
+
+  def clear_blocked_request(player_id) do
+    Redix.command(:redix, ["HDEL", "#{@redis_prefix}:blocked_requests", player_id])
+  end
+
   defp generate_clues do
     %{
-      q0: "Banda favorita ?", a0: nil,
-      q1: "Filme favorito ?", a1: nil,
-      q2: "Comida favorita ?", a2: nil,
-      q3: "Cor favorita ?", a3: nil,
-      q4: "Animal favorito ?", a4: nil,
-      q5: "Cidade favorita ?", a5: nil,
-      q6: "País favorito ?", a6: nil,
-      q7: "Hobbie favorito ?", a7: nil,
+      q0: "Quando você era pequeno, qual era o seu sonho de futuro ?", a0: nil,
+      q1: "Qual seu filme favorito ?", a1: nil,
+      q2: "Qual sua comida favorita ?", a2: nil,
+      q3: "Qual sua cor favorita ?", a3: nil,
+      q4: "Qual seu animal favorito ?", a4: nil,
+      q5: "Quanto tempo de Dental Office ?", a5: nil,
+      q6: "Qual seu Hobbie favorito ?", a6: nil,
+      q7: "Qual seu jogo favorito ?", a7: nil,
     }
   end
 end

@@ -31,7 +31,11 @@ defmodule KillingRequestGameWeb.LobbyLive do
      |> assign(:phase, game_state.phase)
      |> assign(:id, player_id)
      |> assign(:name, player_name)
-     |> assign(:form_answers, %{})}
+     |> assign(:form_answers, %{})
+     |> assign(:successful_requests, RedisSession.get_successful_requests())
+     |> assign(:killed_requests, RedisSession.get_killed_requests())
+     |> assign(:request_form, %{url: "", method: "GET", body: "", params: "", raw_request: ""})
+     |> assign(:selected_raw_response, nil)}
   end
 
   def handle_info(:tick, socket) do
@@ -46,6 +50,9 @@ defmodule KillingRequestGameWeb.LobbyLive do
         |> assign(:hints, converted_state.hints)
         |> assign(:phase, converted_state.phase)
         |> assign(:clues, converted_state.clues)
+        |> assign(:request_form, socket.assigns.request_form)
+        |> assign(:successful_requests, converted_state.successful_requests)
+        |> assign(:killed_requests, converted_state.killed_requests)
 
         {:noreply, socket}
       _ ->
@@ -64,7 +71,7 @@ defmodule KillingRequestGameWeb.LobbyLive do
         %{p | x: x, y: y}
       end)
 
-    {:noreply, assign(socket, players: updated_players)}
+    {:noreply, assign(socket, players: updated_players, request_form: socket.assigns.request_form)}
   end
 
   def handle_info({:player_removed, id}, socket) do
@@ -77,8 +84,40 @@ defmodule KillingRequestGameWeb.LobbyLive do
     {:noreply, assign(socket, phase: :questions, assassin: assassin)}
   end
 
+  def handle_info({:game_ended}, socket) do
+    {:noreply, assign(socket, phase: :end)}
+  end
+
   def handle_info({:assassin_questions_finished}, socket) do
+    RedisSession.set_phase(:game)
     {:noreply, assign(socket, phase: :game)}
+  end
+
+  def handle_info({:request_result, log, player_id}, socket) do
+    if player_id == socket.assigns.id do
+      {:noreply, socket }
+    else
+      successful_requests = RedisSession.get_successful_requests()
+      IO.inspect(successful_requests)
+
+      {:noreply, assign(socket, logs: [log | socket.assigns.logs], successful_requests: successful_requests)}
+    end
+  end
+
+  def handle_info({:log_added, log, player_id}, socket) do
+    if player_id == socket.assigns.id do
+      {:noreply, socket}
+    else
+      {:noreply, assign(socket, logs: [log | socket.assigns.logs])}
+    end
+  end
+
+  def handle_info({:killed_request}, socket) do
+    {:noreply, assign(socket, killed_requests: RedisSession.get_killed_requests())}
+  end
+
+  def handle_info({:request_vote}, socket) do
+    {:noreply, assign(socket, phase: :report)}
   end
 
   def handle_event("register", %{"name" => name}, socket) do
@@ -105,17 +144,10 @@ defmodule KillingRequestGameWeb.LobbyLive do
     if id != nil and Map.has_key?(socket.assigns.players, id) do
       Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:player_moved, %{id: id, x: x, y: y}})
 
-      {:noreply, assign(socket, id: id)}
+      {:noreply, assign(socket, id: id, request_form: socket.assigns.request_form)}
     else
       {:noreply, socket}
     end
-  end
-
-  def handle_event("click_request", %{"request_id" => id, "player_id" => pid}, socket) do
-    logs = [%{player: pid, action: "clicked", request: id} | socket.assigns.logs]
-    {requests, hints} = {socket.assigns.requests, socket.assigns.hints}
-
-    {:noreply, assign(socket, logs: logs, requests: requests, hints: hints)}
   end
 
   def handle_event("clear_session", _params, socket) do
@@ -145,15 +177,222 @@ defmodule KillingRequestGameWeb.LobbyLive do
     {:noreply, assign(socket, form_answers: form_answers)}
   end
 
-  def handle_event("kill_request", %{"request_id" => rid, "player_id" => pid}, socket) do
-    if pid == socket.assigns.assassin do
-      reqs = Map.update!(socket.assigns.requests, String.to_integer(rid), fn req -> Map.put(req, :status, 500) end)
-      hints = Enum.random(socket.assigns.clues)
-      logs = [%{player: pid, action: "killed", request: rid} | socket.assigns.logs]
-      {:noreply, assign(socket, logs: logs, requests: reqs, hints: hints)}
+  def handle_event("update_request_form", %{"field" => field, "value" => value}, socket) do
+    request_form = Map.put(socket.assigns.request_form, String.to_atom(field), value)
+    {:noreply, assign(socket, request_form: request_form)}
+  end
+
+  # -----------------------------------------------------------------------------------------------
+  # API Requests
+  # -----------------------------------------------------------------------------------------------
+
+  def handle_event("submit_request", %{"url" => url, "method" => method, "body" => body, "params" => params}, socket) do
+    player_id = socket.assigns.id
+
+    # Log the request submission
+    log = %{
+      player: player_id,
+      action: "Processando 🕛 5s",
+      request: "#{method} #{url}",
+      raw_response: nil,
+      response_size: nil
+    }
+
+    RedisSession.add_log(log)
+    Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:log_added, log, player_id})
+
+    {:noreply,
+     socket
+     |> assign(logs: [log | socket.assigns.logs])
+     |> push_event("make_delayed_request", %{
+       url: url,
+       method: method,
+       body: body,
+       params: params,
+       player_id: player_id,
+       delay: 5000
+     })}
+  end
+
+  def handle_event("block_player_request", %{"target_player_id" => target_player_id}, socket) do
+    if socket.assigns.id == socket.assigns.assassin do
+      # Block the request
+      RedisSession.block_player_request(target_player_id)
+      logs = [%{
+        player: socket.assigns.id,
+        action: "KILLED ☠️",
+        request: "blocked #{target_player_id}",
+        raw_response: nil,
+        response_size: nil
+      } | socket.assigns.logs]
+      {:noreply, assign(socket, logs: logs)}
     else
       {:noreply, socket}
     end
+  end
+
+  def handle_event("request_result", %{"error" => error, "method" => method, "status" => status, "success" => false, "url" => url, "player" => player_request_id}, socket) do
+    logs = [%{player: player_request_id, action: "Falha 🤔 #{status}", request: "#{method} #{url} (#{error})", raw_response: nil, response_size: nil} | socket.assigns.logs]
+
+    {:noreply, assign(socket, logs: logs)}
+  end
+
+  def handle_event("request_result_blocked", data, socket) do
+    clues = RedisSession.get_clues()
+    clue_strings = for i <- 0..7 do
+      question = clues["q#{i}"]
+      answer = clues["a#{i}"]
+      "#{question} #{answer}"
+    end
+
+    # Pick a random clue
+    random_clue = Enum.random(clue_strings)
+
+    raw_response = %{
+      method: data["method"],
+      url: data["url"],
+      status: data["status"],
+      headers: %{"X-Clue" => random_clue},
+      body: nil,
+      size: nil,
+      timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    log = %{
+      player: data["player"],
+      action: "KILLED 🔪",
+      request: data["url"],
+      raw_response: raw_response,
+      response_size: nil,
+      success: false,
+      status: 500,
+      error: "Request blocked by assassin"
+    }
+
+    RedisSession.add_log(log)
+    RedisSession.increment_killed_requests(data["player"])
+    Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:killed_request})
+
+    if length(RedisSession.get_killed_requests()) >= 20 do
+      Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:game_ended})
+    end
+
+    {:noreply, assign(socket, logs: [log | socket.assigns.logs])}
+  end
+
+  def handle_event("request_result", %{
+    "success" => success,
+    "method" => method,
+    "url" => url,
+    "status" => status,
+    "error" => error,
+    "response_headers" => headers,
+    "response_body" => body,
+    "response_size" => size,
+    "player" => player_request_id
+  }, socket) do
+    player_id = socket.assigns.id
+
+    # Create raw response data
+    raw_response = %{
+      method: method,
+      url: url,
+      status: status,
+      headers: headers,
+      body: body,
+      size: size,
+      timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+    raw_response = if player_request_id == player_id, do: raw_response, else: nil
+
+    log = if success do
+      RedisSession.increment_successful_requests(player_id)
+
+      %{player: player_id,
+        action: "Ufa! Tudo Limpo ✅",
+        request: "#{method} #{url} (#{status})",
+        response_size: size, raw_response: raw_response}
+    else
+      %{player: player_id, action: "Falha 🤔", request: "#{method} #{url} (#{error})", raw_response: raw_response, response_size: nil}
+    end
+
+    RedisSession.add_log(log)
+
+    successful_requests = RedisSession.get_successful_requests()
+    Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:request_result, log, player_request_id})
+
+    if length(successful_requests) >= 40 do
+      Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:game_ended})
+    end
+
+    {:noreply, assign(socket, logs: [log | socket.assigns.logs], successful_requests: successful_requests)}
+  end
+
+  def handle_event("show_raw_response", %{"log-index" => log_index}, socket) do
+    log_index = String.to_integer(log_index)
+    selected_log = Enum.at(socket.assigns.logs, log_index)
+
+    if selected_log && selected_log.raw_response do
+      {:noreply, assign(socket, selected_raw_response: selected_log.raw_response)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("request_vote", _params, socket) do
+    RedisSession.set_phase(:report)
+    Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:request_vote})
+    {:noreply, socket}
+  end
+
+  def handle_event("vote_player", %{"target_id" => target_id}, socket) do
+    voter_id = socket.assigns.id
+    target_player = Map.get(socket.assigns.players, target_id)
+
+    if target_player do
+      # Log the vote
+      vote_log = %{
+        player: voter_id,
+        action: "voted_for",
+        request: "voted for #{target_player.name} (#{target_id})",
+        raw_response: nil,
+        response_size: nil
+      }
+
+      RedisSession.add_log(vote_log)
+      Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:log_added, vote_log, voter_id})
+
+      # Check if the voted player is actually the assassin
+      if target_id == socket.assigns.assassin do
+        # Correct vote - assassino foi descoberto!
+        victory_log = %{
+          player: "SYSTEM",
+          action: "ASSASSINO DESCOBERTO! 🎉",
+          request: "#{voter_id} descobriu que #{target_player.name} é o assassino!",
+          raw_response: nil,
+          response_size: nil
+        }
+
+        RedisSession.add_log(victory_log)
+        Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:game_ended})
+        Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:log_added, victory_log, "SYSTEM"})
+      else
+        # Wrong vote - assassino vence!
+        defeat_log = %{
+          player: "SYSTEM",
+          action: "VOTO ERRADO! ☠️",
+          request: "#{voter_id} votou errado! O assassino continua livre!",
+          raw_response: nil,
+          response_size: nil
+        }
+
+        RedisSession.add_log(defeat_log)
+        Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:game_ended})
+        Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:log_added, defeat_log, "SYSTEM"})
+      end
+    end
+
+    {:noreply, socket}
   end
 
   # Helper function to get or generate player ID from session
@@ -166,4 +405,75 @@ defmodule KillingRequestGameWeb.LobbyLive do
         player_id
     end
   end
+
+  # Helper function to get HTTP status text
+  defp get_status_text(status) do
+    case status do
+      200 -> "OK"
+      201 -> "Created"
+      204 -> "No Content"
+      400 -> "Bad Request"
+      401 -> "Unauthorized"
+      403 -> "Forbidden"
+      404 -> "Not Found"
+      500 -> "Internal Server Error"
+      502 -> "Bad Gateway"
+      503 -> "Service Unavailable"
+      _ -> "Unknown"
+    end
+  end
+
+  # Helper function to truncate response body
+  defp truncate_response(body) when is_binary(body) do
+    if String.length(body) > 500 do
+      String.slice(body, 0, 500) <> "\n... (truncated)"
+    else
+      body
+    end
+  end
+  defp truncate_response(_), do: "No body"
+
+  # Helper function to format response body with JSON syntax highlighting
+  defp format_response_body(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, json_data} ->
+        # Format JSON with proper indentation
+        formatted_json = Jason.encode!(json_data, pretty: true)
+        # Convert to HTML with syntax highlighting
+        formatted_json
+        |> String.replace("&", "&amp;")
+        |> String.replace("<", "&lt;")
+        |> String.replace(">", "&gt;")
+        |> String.replace("\"", "<span class=\"text-green-400\">\"</span>")
+        |> String.replace(":", "<span class=\"text-yellow-400\">:</span>")
+        |> String.replace("{", "<span class=\"text-blue-400\">{</span>")
+        |> String.replace("}", "<span class=\"text-blue-400\">}</span>")
+        |> String.replace("[", "<span class=\"text-purple-400\">[</span>")
+        |> String.replace("]", "<span class=\"text-purple-400\">]</span>")
+        |> String.replace(",", "<span class=\"text-gray-400\">,</span>")
+        |> String.replace("\n", "<br>")
+        |> String.replace("  ", "&nbsp;&nbsp;")
+        |> Phoenix.HTML.raw()
+      _ ->
+        # Not JSON, return as plain text
+        body
+        |> String.replace("&", "&amp;")
+        |> String.replace("<", "&lt;")
+        |> String.replace(">", "&gt;")
+        |> String.replace("\n", "<br>")
+        |> Phoenix.HTML.raw()
+    end
+  end
+  defp format_response_body(_), do: Phoenix.HTML.raw("No body")
+
+  # Helper function to format headers for display
+  defp format_headers(headers) when is_map(headers) do
+    headers
+    |> Enum.map(fn {key, value} -> %{key: key, value: value} end)
+  end
+  defp format_headers(headers) when is_list(headers) do
+    headers
+    |> Enum.map(fn {key, value} -> %{key: key, value: value} end)
+  end
+  defp format_headers(_), do: []
 end
