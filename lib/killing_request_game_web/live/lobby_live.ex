@@ -21,21 +21,23 @@ defmodule KillingRequestGameWeb.LobbyLive do
 
     {:ok,
      socket
-     |> assign(:page_title, "Killing Request Game")
-     |> assign(:players, game_state.players)
-     |> assign(:requests, game_state.requests)
-     |> assign(:assassin, game_state.assassin)
-     |> assign(:logs, game_state.logs)
-     |> assign(:clues, game_state.clues)
-     |> assign(:hints, game_state.hints)
-     |> assign(:phase, game_state.phase)
-     |> assign(:id, player_id)
-     |> assign(:name, player_name)
-     |> assign(:form_answers, %{})
-     |> assign(:successful_requests, RedisSession.get_successful_requests())
-     |> assign(:killed_requests, RedisSession.get_killed_requests())
-     |> assign(:request_form, %{url: "", method: "GET", body: "", params: "", raw_request: ""})
-     |> assign(:selected_raw_response, nil)}
+      |> assign(:page_title, "Killing Request Game")
+      |> assign(:players, game_state.players)
+      |> assign(:requests, game_state.requests)
+      |> assign(:assassin, game_state.assassin)
+      |> assign(:logs, game_state.logs)
+      |> assign(:clues, game_state.clues)
+      |> assign(:hints, game_state.hints)
+      |> assign(:phase, game_state.phase)
+      |> assign(:id, player_id)
+      |> assign(:name, player_name)
+      |> assign(:form_answers, %{})
+      |> assign(:successful_requests, RedisSession.get_successful_requests())
+      |> assign(:killed_requests, RedisSession.get_killed_requests())
+      |> assign(:vote_requests, RedisSession.get_vote_requests())
+      |> assign(:vote_results, %{})
+      |> assign(:request_form, %{url: "", method: "GET", body: "", params: "", raw_request: ""})
+      |> assign(:selected_raw_response, nil)}
   end
 
   def handle_info(:tick, socket) do
@@ -53,6 +55,8 @@ defmodule KillingRequestGameWeb.LobbyLive do
         |> assign(:request_form, socket.assigns.request_form)
         |> assign(:successful_requests, converted_state.successful_requests)
         |> assign(:killed_requests, converted_state.killed_requests)
+        |> assign(:vote_requests, converted_state.vote_requests)
+        |> assign(:vote_results, converted_state.vote_results)
 
         {:noreply, socket}
       _ ->
@@ -98,7 +102,6 @@ defmodule KillingRequestGameWeb.LobbyLive do
       {:noreply, socket }
     else
       successful_requests = RedisSession.get_successful_requests()
-      IO.inspect(successful_requests)
 
       {:noreply, assign(socket, logs: [log | socket.assigns.logs], successful_requests: successful_requests)}
     end
@@ -116,8 +119,16 @@ defmodule KillingRequestGameWeb.LobbyLive do
     {:noreply, assign(socket, killed_requests: RedisSession.get_killed_requests())}
   end
 
+  def handle_info({:request_vote_updated, vote_requests}, socket) do
+    {:noreply, assign(socket, vote_requests: vote_requests)}
+  end
+
   def handle_info({:request_vote}, socket) do
     {:noreply, assign(socket, phase: :report)}
+  end
+
+  def handle_info({:voting_finished}, socket) do
+    {:noreply, assign(socket, phase: :game, vote_requests: [], vote_results: %{})}
   end
 
   def handle_event("register", %{"name" => name}, socket) do
@@ -164,7 +175,6 @@ defmodule KillingRequestGameWeb.LobbyLive do
   end
 
   def handle_event("answer_clue_question", params, socket) do
-    IO.inspect(params)
     RedisSession.save_clues(params)
 
     Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:assassin_questions_finished})
@@ -340,59 +350,92 @@ defmodule KillingRequestGameWeb.LobbyLive do
   end
 
   def handle_event("request_vote", _params, socket) do
-    RedisSession.set_phase(:report)
-    Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:request_vote})
-    {:noreply, socket}
+    player_id = socket.assigns.id
+    vote_requests = RedisSession.get_vote_requests()
+
+    # Prevent duplicate vote requests
+    if player_id in vote_requests do
+      {:noreply, socket}
+    else
+      # Add vote request
+      RedisSession.add_vote_request(player_id)
+      vote_requests = RedisSession.get_vote_requests()
+      Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:request_vote_updated, vote_requests})
+
+      # Check if we have enough vote requests (threshold = 2)
+      if length(vote_requests) >= 2 do
+        RedisSession.set_phase(:report)
+        Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:request_vote})
+      end
+
+      {:noreply, assign(socket, vote_requests: vote_requests)}
+    end
   end
 
   def handle_event("vote_player", %{"target_id" => target_id}, socket) do
     voter_id = socket.assigns.id
     target_player = Map.get(socket.assigns.players, target_id)
+    vote_results = RedisSession.get_vote_results()
 
-    if target_player do
-      # Log the vote
-      vote_log = %{
-        player: voter_id,
-        action: "voted_for",
-        request: "voted for #{target_player.name} (#{target_id})",
-        raw_response: nil,
-        response_size: nil
-      }
+    # Prevent duplicate votes
+    if Map.has_key?(vote_results, voter_id) do
+      {:noreply, assign(socket, vote_results: vote_results)}
+    else
+      if target_player do
+        # Add vote to results
+        RedisSession.add_vote(target_id, voter_id)
+        updated_vote_results = RedisSession.get_vote_results()
 
-      RedisSession.add_log(vote_log)
-      Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:log_added, vote_log, voter_id})
+        # Check if all players have voted
+        total_votes = map_size(updated_vote_results)
+        total_players = map_size(socket.assigns.players)
 
-      # Check if the voted player is actually the assassin
-      if target_id == socket.assigns.assassin do
-        # Correct vote - assassino foi descoberto!
-        victory_log = %{
-          player: "SYSTEM",
-          action: "ASSASSINO DESCOBERTO! 🎉",
-          request: "#{voter_id} descobriu que #{target_player.name} é o assassino!",
-          raw_response: nil,
-          response_size: nil
-        }
+        if total_votes >= total_players do
+          # Tally votes: count how many votes each target received
+          tally = Enum.reduce(updated_vote_results, %{}, fn {_voter, target}, acc ->
+            Map.update(acc, target, 1, &(&1 + 1))
+          end)
+          {most_voted_player, _vote_count} = Enum.max_by(tally, fn {_player_id, count} -> count end, fn -> {nil, 0} end)
 
-        RedisSession.add_log(victory_log)
-        Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:game_ended})
-        Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:log_added, victory_log, "SYSTEM"})
+          if most_voted_player == socket.assigns.assassin do
+            # Correct vote - assassino foi descoberto!
+            most_voted_player_data = Map.get(socket.assigns.players, most_voted_player)
+            victory_log = %{
+              player: "SYSTEM",
+              action: "ASSASSINO DESCOBERTO! 🎉",
+              request: "#{most_voted_player_data.name} é o assassino!",
+              raw_response: nil,
+              response_size: nil
+            }
+
+            RedisSession.add_log(victory_log)
+            Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:game_ended})
+            Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:log_added, victory_log, "SYSTEM"})
+          else
+            defeat_log = %{
+              player: "SYSTEM",
+              action: "VOTO ERRADO! ☠️",
+              request: "O assassino continua livre! Jogo continua...",
+              raw_response: nil,
+              response_size: nil
+            }
+
+            RedisSession.add_log(defeat_log)
+            Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:log_added, defeat_log, "SYSTEM"})
+
+            # Reset voting and continue game
+            RedisSession.clear_vote_requests()
+            RedisSession.clear_vote_results()
+            RedisSession.set_phase(:game)
+            Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:voting_finished})
+          end
+        end
+
+        {:noreply, assign(socket, vote_results: updated_vote_results)}
       else
-        # Wrong vote - assassino vence!
-        defeat_log = %{
-          player: "SYSTEM",
-          action: "VOTO ERRADO! ☠️",
-          request: "#{voter_id} votou errado! O assassino continua livre!",
-          raw_response: nil,
-          response_size: nil
-        }
-
-        RedisSession.add_log(defeat_log)
-        Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:game_ended})
-        Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:log_added, defeat_log, "SYSTEM"})
+        {:noreply, assign(socket, vote_results: vote_results)}
       end
     end
-
-    {:noreply, socket}
   end
 
   # Helper function to get or generate player ID from session

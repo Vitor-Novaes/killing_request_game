@@ -33,6 +33,8 @@ defmodule KillingRequestGame.RedisSession do
           "requests" => %{},
           "successful_requests" => [],
           "killed_requests" => [],
+          "vote_requests" => [],
+          "vote_results" => %{},
           "assassin" => nil,
           "logs" => [],
           "clues" => generate_clues(),
@@ -129,6 +131,8 @@ defmodule KillingRequestGame.RedisSession do
       "requests" => %{},
       "successful_requests" => [],
       "killed_requests" => [],
+      "vote_requests" => [],
+      "vote_results" => %{},
       "assassin" => nil,
       "logs" => [],
       "clues" => generate_clues(),
@@ -171,7 +175,9 @@ defmodule KillingRequestGame.RedisSession do
       logs: convert_logs(redis_data["logs"]),
       clues: redis_data["clues"],
       hints: redis_data["hints"],
-      phase: String.to_atom(redis_data["phase"])
+      phase: String.to_atom(redis_data["phase"]),
+      vote_requests: redis_data["vote_requests"] || [],
+      vote_results: redis_data["vote_results"] || %{}
     }
   end
 
@@ -297,6 +303,51 @@ defmodule KillingRequestGame.RedisSession do
       {:ok, state} -> state["successful_requests"]
       {:error, :not_found} -> %{}
     end
+  end
+
+  # Vote request functions
+  def add_vote_request(player_id) do
+    update_game_controller(%{
+      "vote_requests" => fn vote_requests ->
+        [player_id | vote_requests]
+      end
+    })
+  end
+
+  def get_vote_requests do
+    case get_game_controller() do
+      {:ok, state} -> state["vote_requests"] || []
+      {:error, :not_found} -> []
+    end
+  end
+
+  def clear_vote_requests do
+    update_game_controller(%{
+      "vote_requests" => []
+    })
+  end
+
+  # Vote results functions
+  # Now stores: %{voter_id => target_player_id}
+  def add_vote(target_player_id, voter_id) do
+    update_game_controller(%{
+      "vote_results" => fn vote_results ->
+        Map.put(vote_results, voter_id, target_player_id)
+      end
+    })
+  end
+
+  def get_vote_results do
+    case get_game_controller() do
+      {:ok, state} -> state["vote_results"] || %{}
+      {:error, :not_found} -> %{}
+    end
+  end
+
+  def clear_vote_results do
+    update_game_controller(%{
+      "vote_results" => %{}
+    })
   end
 
   def block_player_request(player_id) do
