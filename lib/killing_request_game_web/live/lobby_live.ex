@@ -37,7 +37,8 @@ defmodule KillingRequestGameWeb.LobbyLive do
       |> assign(:vote_requests, RedisSession.get_vote_requests())
       |> assign(:vote_results, %{})
       |> assign(:request_form, %{url: "", method: "GET", body: "", params: "", raw_request: ""})
-      |> assign(:selected_raw_response, nil)}
+      |> assign(:selected_raw_response, nil)
+      |> assign(:cooldown, false)}
   end
 
   def handle_info(:tick, socket) do
@@ -128,7 +129,7 @@ defmodule KillingRequestGameWeb.LobbyLive do
   end
 
   def handle_info({:voting_finished}, socket) do
-    {:noreply, assign(socket, phase: :game, vote_requests: [], vote_results: %{})}
+    {:noreply, assign(socket, phase: :game, vote_requests: [], vote_results: %{}, cooldown: false)}
   end
 
   def handle_event("register", %{"name" => name}, socket) do
@@ -213,7 +214,7 @@ defmodule KillingRequestGameWeb.LobbyLive do
 
     {:noreply,
      socket
-     |> assign(logs: [log | socket.assigns.logs])
+     |> assign(logs: [log | socket.assigns.logs], cooldown: true)
      |> push_event("make_delayed_request", %{
        url: url,
        method: method,
@@ -244,7 +245,7 @@ defmodule KillingRequestGameWeb.LobbyLive do
   def handle_event("request_result", %{"error" => error, "method" => method, "status" => status, "success" => false, "url" => url, "player" => player_request_id}, socket) do
     logs = [%{player: player_request_id, action: "Falha 🤔 #{status}", request: "#{method} #{url} (#{error})", raw_response: nil, response_size: nil} | socket.assigns.logs]
 
-    {:noreply, assign(socket, logs: logs)}
+    {:noreply, assign(socket, logs: logs, cooldown: false)}
   end
 
   def handle_event("request_result_blocked", data, socket) do
@@ -287,7 +288,7 @@ defmodule KillingRequestGameWeb.LobbyLive do
       Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:game_ended})
     end
 
-    {:noreply, assign(socket, logs: [log | socket.assigns.logs])}
+    {:noreply, assign(socket, logs: [log | socket.assigns.logs], cooldown: false)}
   end
 
   def handle_event("request_result", %{
@@ -335,7 +336,7 @@ defmodule KillingRequestGameWeb.LobbyLive do
       Phoenix.PubSub.broadcast(KillingRequestGame.PubSub, "game:lobby", {:game_ended})
     end
 
-    {:noreply, assign(socket, logs: [log | socket.assigns.logs], successful_requests: successful_requests)}
+    {:noreply, assign(socket, logs: [log | socket.assigns.logs], successful_requests: successful_requests, cooldown: false)}
   end
 
   def handle_event("show_raw_response", %{"log-index" => log_index}, socket) do
